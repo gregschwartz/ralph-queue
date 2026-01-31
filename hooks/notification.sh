@@ -29,6 +29,12 @@ INPUT=$(cat)
 # Parse notification type
 NOTIFICATION_TYPE=$(echo "$INPUT" | jq -r '.notification_type // "unknown"')
 
+# Clear idle timestamp for non-idle notifications (Claude is active)
+IDLE_TIMESTAMP_FILE=".ralph/.idle_start_time"
+if [[ "$NOTIFICATION_TYPE" != "idle_prompt" ]] && [[ -f "$IDLE_TIMESTAMP_FILE" ]]; then
+    rm -f "$IDLE_TIMESTAMP_FILE"
+fi
+
 case "$NOTIFICATION_TYPE" in
     elicitation_dialog)
         # Claude is asking user a question!
@@ -52,7 +58,27 @@ Reply with your choice or answer."
         ;;
 
     idle_prompt)
-        telegram_send "💤 Claude is idle and waiting for input"
+        # 5-minute delay before sending idle alert
+        IDLE_TIMESTAMP_FILE=".ralph/.idle_start_time"
+        IDLE_DELAY_SECONDS=300  # 5 minutes
+        CURRENT_TIME=$(date +%s)
+
+        if [[ -f "$IDLE_TIMESTAMP_FILE" ]]; then
+            # Read when idle started
+            IDLE_START=$(cat "$IDLE_TIMESTAMP_FILE")
+            ELAPSED=$((CURRENT_TIME - IDLE_START))
+
+            if [[ $ELAPSED -ge $IDLE_DELAY_SECONDS ]]; then
+                # 5 minutes have passed, send alert
+                telegram_send "💤 Claude is idle and waiting for input (idle for $((ELAPSED / 60)) minutes)"
+                # Don't delete the file - keep tracking idle time
+            fi
+            # else: still within 5-minute grace period, don't send alert
+        else
+            # First time seeing idle, record the timestamp
+            mkdir -p .ralph
+            echo "$CURRENT_TIME" > "$IDLE_TIMESTAMP_FILE"
+        fi
         ;;
 
     auth_success)
