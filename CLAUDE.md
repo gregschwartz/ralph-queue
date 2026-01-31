@@ -793,3 +793,74 @@ These standards ensure:
 - **Automation**: Ralph integration ensures continuous development practices
 
 **Enforcement**: AI agents should automatically apply these standards to all feature development tasks without requiring explicit instruction for each task.
+
+## Greg's Development Preferences (ralph-queue fork)
+
+### Added Features in This Fork
+- **ralph-task**: Unified task management CLI
+- **remote-control**: Generic interface for remote adapters
+- **telegram**: Telegram adapter (first remote control implementation)
+
+### Branch Strategy
+- **Separate feature branches** for each capability
+- Each feature should be independently PR-able to upstream
+- Branches: `feature/ralph-task`, `feature/remote-control`, `feature/telegram`
+- **Squash/rebase commits** before merging to main for clean history
+
+### Architecture Principles
+- **Decoupled layers** - ralph-task knows nothing about remote control
+- **Adapters implement interfaces** - Telegram implements remote_control.sh interface
+- **Command handler is remote-agnostic** - Routes commands without knowing source
+- Design for extension: Slack adapter, Web adapter should plug in easily
+
+```
+ralph-task (pure CLI, no dependencies)
+     ↑
+command_handler.sh (routes to ralph-task, uses rc_* interface)
+     ↑
+remote_control.sh (generic interface: rc_send, rc_receive, rc_ask)
+     ↑
+telegram.sh / slack.sh / web.sh (adapters)
+```
+
+### Compatibility Requirements
+- **Bash 3.2 compatible** - macOS ships with old bash
+- Avoid `${var,,}` - use `$(echo "$var" | tr '[:upper:]' '[:lower:]')`
+- Avoid bash 4+ associative arrays in critical paths
+- Test on macOS default /bin/bash
+
+### Task Storage
+- Directory-based: `*/tasks/*.md` files
+- Priority in filename: `H_timestamp_slug.md`, `M_...`, `L_...`
+- Done tasks: `*/tasks/done/` with date prefix
+- Future consideration: beads backend for dependency tracking
+
+### Remote Control Design Goals
+- Add tasks from Telegram, Slack, or web interface
+- Commands: `/task`, `/tasks`, `/next`, `/done`, `/skip`, `/queue`, `/status`
+- User whitelist for security (adapter handles authorization)
+- Buttons/callbacks for interactive responses
+
+### PR Workflow for Upstream
+1. Develop on feature branch
+2. Squash to single clean commit per feature
+3. Update branch pointer: `git branch -f feature/X <commit>`
+4. Each feature can be PR'd independently
+
+### Quick Reference
+```bash
+# Test ralph-task
+cd ~/code/tldr-root && ralph-task list
+
+# Install aliases (rt, rta, rtl, rtn, rtd)
+~/code/ralph-queue/install-ralph-task.sh
+
+# Clean up commits before PR
+git reset --soft <upstream-commit>
+git reset HEAD
+# Commit each feature separately
+
+# Update feature branches
+git branch -f feature/X <commit>
+git push -f origin feature/X
+```
