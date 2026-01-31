@@ -401,6 +401,197 @@ wait_for_reset() {
     log_status "SUCCESS" "Rate limit reset! Ready for new calls."
 }
 
+# Generate suggested tool pattern from denied command
+# e.g. "npm install lodash" -> "Bash(npm *)"
+suggest_tool_pattern() {
+    local cmd="$1"
+    local first_word="${cmd%% *}"
+
+    # Common patterns - suggest wildcard version
+    case "$first_word" in
+        npm|pnpm|yarn|bun)
+            echo "Bash($first_word *)"
+            ;;
+        git)
+            echo "Bash(git *)"
+            ;;
+        pytest|python|python3)
+            echo "Bash($first_word *)"
+            ;;
+        cargo|rustc)
+            echo "Bash($first_word *)"
+            ;;
+        go)
+            echo "Bash(go *)"
+            ;;
+        make|cmake)
+            echo "Bash($first_word *)"
+            ;;
+        docker|docker-compose)
+            echo "Bash(docker*)"
+            ;;
+        *)
+            # Specific command as fallback
+            echo "Bash($cmd)"
+            ;;
+    esac
+}
+
+# Add a tool pattern to ALLOWED_TOOLS in .ralphrc
+add_allowed_tool() {
+    local pattern="$1"
+
+    if [[ ! -f ".ralphrc" ]]; then
+        log_status "ERROR" "No .ralphrc file found"
+        return 1
+    fi
+
+    # Get current ALLOWED_TOOLS
+    local current_tools=$(grep "^ALLOWED_TOOLS=" ".ralphrc" 2>/dev/null | cut -d= -f2- | tr -d '"')
+
+    # Check if pattern already exists
+    if [[ "$current_tools" == *"$pattern"* ]]; then
+        log_status "INFO" "Pattern '$pattern' already in ALLOWED_TOOLS"
+        return 0
+    fi
+
+    # Append new pattern
+    local new_tools="${current_tools},${pattern}"
+
+    # Update .ralphrc - escape special chars for sed
+    local escaped_current=$(printf '%s\n' "$current_tools" | sed 's/[[\.*^$()+?{|]/\\&/g')
+    local escaped_new=$(printf '%s\n' "$new_tools" | sed 's/[&/\]/\\&/g')
+
+    if sed -i.bak "s|ALLOWED_TOOLS=\"${escaped_current}\"|ALLOWED_TOOLS=\"${escaped_new}\"|" ".ralphrc" 2>/dev/null || \
+       sed -i '' "s|ALLOWED_TOOLS=\"${escaped_current}\"|ALLOWED_TOOLS=\"${escaped_new}\"|" ".ralphrc" 2>/dev/null; then
+        rm -f ".ralphrc.bak"
+        log_status "SUCCESS" "Added '$pattern' to ALLOWED_TOOLS"
+        return 0
+    else
+        log_status "ERROR" "Failed to update .ralphrc"
+        return 1
+    fi
+}
+
+# Ask user via Telegram for permission to add a tool
+# Outputs the pattern to add (suggested or custom from user)
+# Returns: 0 if allowed (pattern in stdout), 1 if denied/timeout
+ask_permission_via_telegram() {
+    local denied_cmd="$1"
+    local suggested_pattern=$(suggest_tool_pattern "$denied_cmd")
+
+    # If Telegram not enabled, fall back to deny
+    if [[ "$TELEGRAM_ENABLED" != "true" ]]; then
+        log_status "WARN" "Telegram not enabled - cannot ask for permission"
+        return 1
+    fi
+
+    log_status "INFO" "Asking user for permission via Telegram..."
+
+    # Send message with buttons AND allow text response
+    telegram_send "🔐 Permission Request
+
+Denied command: \`$denied_cmd\`
+Suggested pattern: \`$suggested_pattern\`
+
+Reply with:
+• 'yes' or 'y' - Add suggested pattern
+• 'no' or 'n' - Deny and halt
+• Custom pattern like \`Bash(npm *)\` - Add your pattern
+• A question - I'll answer and ask again"
+
+    local max_attempts=3
+    local attempt=0
+
+    while [[ $attempt -lt $max_attempts ]]; do
+        ((attempt++))
+
+        local response
+        response=$(telegram_ask "Waiting for response..." 120)
+
+        # Handle timeout
+        if [[ "$response" == "TIMEOUT" || "$response" == "SKIPPED" ]]; then
+            telegram_send "⏱️ Timeout - halting"
+            return 1
+        fi
+
+        local response_lower=$(echo "$response" | tr '[:upper:]' '[:lower:]')
+
+        # Check for yes/allow
+        if [[ "$response_lower" =~ ^(y|yes|allow|ok|sure)$ ]]; then
+            echo "$suggested_pattern"
+            return 0
+        fi
+
+        # Check for no/deny
+        if [[ "$response_lower" =~ ^(n|no|deny|stop|halt)$ ]]; then
+            return 1
+        fi
+
+        # Check for custom tool pattern (contains Bash, Write, Read, Edit, etc.)
+        if [[ "$response" =~ (Bash|Write|Read|Edit|Glob|Grep|Task)\( ]]; then
+            telegram_send "✓ Using custom pattern: \`$response\`"
+            echo "$response"
+            return 0
+        fi
+
+        # Check for question
+        if [[ "$response" == *"?"* ]]; then
+            telegram_send "❓ You asked: $response
+
+The suggested pattern \`$suggested_pattern\` will allow Claude to run commands starting with \`${denied_cmd%% *}\`.
+
+Common patterns:
+• \`Bash(npm *)\` - All npm commands
+• \`Bash(git *)\` - All git commands
+• \`Bash($denied_cmd)\` - Only this exact command
+
+Reply 'yes' to add suggested, 'no' to halt, or type a custom pattern."
+            continue
+        fi
+
+        # Unknown response - treat as potential pattern or ask for clarification
+        telegram_send "❓ Didn't understand '$response'. Reply:
+• 'yes' to allow \`$suggested_pattern\`
+• 'no' to halt
+• A pattern like \`Bash(something *)\`"
+    done
+
+    telegram_send "❌ Max attempts reached - halting"
+    return 1
+}
+
+# Reset permission denial counter in circuit breaker state
+reset_permission_denial_counter() {
+    if [[ -f "$CB_STATE_FILE" ]]; then
+        local state_data=$(cat "$CB_STATE_FILE")
+        local new_state=$(echo "$state_data" | jq '.consecutive_permission_denials = 0')
+        echo "$new_state" > "$CB_STATE_FILE"
+        log_status "INFO" "Reset permission denial counter"
+    fi
+}
+
+# Mark current task as done (moves to tasks/done/)
+mark_task_done() {
+    local ralph_task_cmd="${SCRIPT_DIR}/ralph-task"
+    if [[ -x "$ralph_task_cmd" ]]; then
+        if "$ralph_task_cmd" done 2>/dev/null; then
+            log_status "SUCCESS" "Task moved to done/"
+        fi
+    fi
+}
+
+# Mark current task as failed (moves to tasks/failed/)
+mark_task_failed() {
+    local reason="${1:-unknown}"
+    local ralph_task_cmd="${SCRIPT_DIR}/ralph-task"
+    if [[ -x "$ralph_task_cmd" ]]; then
+        if "$ralph_task_cmd" failed "$reason" 2>/dev/null; then
+            log_status "WARN" "Task moved to failed/ - Reason: $reason"
+        fi
+    fi
+}
+
 # Check if we should gracefully exit
 should_exit_gracefully() {
     
@@ -430,8 +621,8 @@ should_exit_gracefully() {
         if [[ "$has_permission_denials" == "true" ]]; then
             local denied_count=$(jq -r '.analysis.permission_denial_count // 0' "$RESPONSE_ANALYSIS_FILE" 2>/dev/null || echo "0")
             local denied_cmds=$(jq -r '.analysis.denied_commands | join(", ")' "$RESPONSE_ANALYSIS_FILE" 2>/dev/null || echo "unknown")
-            log_status "WARN" "🚫 Permission denied for $denied_count command(s): $denied_cmds"
-            log_status "WARN" "Update ALLOWED_TOOLS in .ralphrc to include the required tools"
+            log_status "WARN" "🚫 Permission denied for $denied_count command(s): $denied_cmds" >&2
+            log_status "WARN" "Update ALLOWED_TOOLS in .ralphrc to include the required tools" >&2
             echo "permission_denied"
             return 0
         fi
@@ -439,14 +630,14 @@ should_exit_gracefully() {
 
     # 1. Too many consecutive test-only loops
     if [[ $recent_test_loops -ge $MAX_CONSECUTIVE_TEST_LOOPS ]]; then
-        log_status "WARN" "Exit condition: Too many test-focused loops ($recent_test_loops >= $MAX_CONSECUTIVE_TEST_LOOPS)"
+        log_status "WARN" "Exit condition: Too many test-focused loops ($recent_test_loops >= $MAX_CONSECUTIVE_TEST_LOOPS)" >&2
         echo "test_saturation"
         return 0
     fi
-    
+
     # 2. Multiple "done" signals
     if [[ $recent_done_signals -ge $MAX_CONSECUTIVE_DONE_SIGNALS ]]; then
-        log_status "WARN" "Exit condition: Multiple completion signals ($recent_done_signals >= $MAX_CONSECUTIVE_DONE_SIGNALS)"
+        log_status "WARN" "Exit condition: Multiple completion signals ($recent_done_signals >= $MAX_CONSECUTIVE_DONE_SIGNALS)" >&2
         echo "completion_signals"
         return 0
     fi
@@ -1389,9 +1580,42 @@ main() {
         
         # Check circuit breaker before attempting execution
         if should_halt_execution; then
+            # Check if circuit breaker opened due to permission denials
+            local cb_reason=$(jq -r '.reason // ""' "$CB_STATE_FILE" 2>/dev/null)
+            if [[ "$cb_reason" == *"Permission denied"* && "$TELEGRAM_ENABLED" == "true" ]]; then
+                log_status "WARN" "Circuit breaker opened due to permission denials - asking via Telegram..."
+
+                # Get the denied command from last response
+                local denied_cmds=$(jq -r '.analysis.denied_commands // []' "$RESPONSE_ANALYSIS_FILE" 2>/dev/null)
+                local first_denied_cmd=$(echo "$denied_cmds" | jq -r '.[0] // empty' 2>/dev/null)
+
+                if [[ -n "$first_denied_cmd" && "$first_denied_cmd" != "null" ]]; then
+                    local pattern_to_add
+                    pattern_to_add=$(ask_permission_via_telegram "$first_denied_cmd")
+                    local perm_result=$?
+
+                    if [[ $perm_result -eq 0 && -n "$pattern_to_add" ]]; then
+                        log_status "SUCCESS" "✅ Permission granted via Telegram"
+                        if add_allowed_tool "$pattern_to_add"; then
+                            # Reset circuit breaker completely
+                            reset_circuit_breaker "Permission granted via Telegram"
+                            if [[ -f ".ralphrc" ]]; then
+                                source ".ralphrc"
+                            fi
+                            telegram_send "✅ Added '$pattern_to_add' to ALLOWED_TOOLS. Continuing..."
+                            log_status "INFO" "Continuing loop after circuit breaker reset"
+                            continue  # Don't break, continue the loop
+                        fi
+                    else
+                        telegram_send "🛑 Permission denied - halting Ralph loop"
+                    fi
+                fi
+            fi
+
             reset_session "circuit_breaker_open"
             update_status "$loop_count" "$(cat "$CALL_COUNT_FILE")" "circuit_breaker_open" "halted" "stagnation_detected"
             log_status "ERROR" "🛑 Circuit breaker has opened - execution halted"
+            mark_task_failed "circuit_breaker_open"
             break
         fi
 
@@ -1405,7 +1629,50 @@ main() {
         local exit_reason=$(should_exit_gracefully)
         if [[ "$exit_reason" != "" ]]; then
             # Handle permission_denied specially (Issue #101)
-            if [[ "$exit_reason" == "permission_denied" ]]; then
+            if [[ "$exit_reason" == *"permission_denied"* ]]; then
+                log_status "WARN" "🚫 Permission denied - checking Telegram for approval..."
+
+                # Get the denied command(s)
+                local denied_cmds=$(jq -r '.analysis.denied_commands // []' "$RESPONSE_ANALYSIS_FILE" 2>/dev/null)
+                local first_denied_cmd=$(echo "$denied_cmds" | jq -r '.[0] // empty' 2>/dev/null)
+
+                if [[ -n "$first_denied_cmd" && "$first_denied_cmd" != "null" ]]; then
+                    # Try to get permission via Telegram
+                    if [[ "$TELEGRAM_ENABLED" == "true" ]]; then
+                        local pattern_to_add
+                        pattern_to_add=$(ask_permission_via_telegram "$first_denied_cmd")
+                        local perm_result=$?
+
+                        if [[ $perm_result -eq 0 && -n "$pattern_to_add" ]]; then
+                            # User allowed - add pattern to .ralphrc
+                            log_status "SUCCESS" "✅ Permission granted via Telegram"
+
+                            if add_allowed_tool "$pattern_to_add"; then
+                                # Reset permission denial counter and continue
+                                reset_permission_denial_counter
+
+                                # Reload .ralphrc to pick up new ALLOWED_TOOLS
+                                if [[ -f ".ralphrc" ]]; then
+                                    source ".ralphrc"
+                                fi
+
+                                telegram_send "✅ Added '$pattern_to_add' to ALLOWED_TOOLS. Continuing..."
+                                log_status "INFO" "Continuing loop after permission granted"
+                                continue  # Don't break, continue the loop
+                            else
+                                log_status "ERROR" "Failed to update .ralphrc"
+                                telegram_send "❌ Failed to update .ralphrc - halting"
+                            fi
+                        else
+                            log_status "WARN" "Permission denied or timeout via Telegram"
+                            telegram_send "🛑 Permission denied - halting Ralph loop"
+                        fi
+                    else
+                        log_status "WARN" "Telegram not enabled - cannot ask for permission interactively"
+                    fi
+                fi
+
+                # Fall through to halt if not handled above
                 log_status "ERROR" "🚫 Permission denied - halting loop"
                 reset_session "permission_denied"
                 update_status "$loop_count" "$(cat "$CALL_COUNT_FILE")" "permission_denied" "halted" "permission_denied"
@@ -1440,6 +1707,7 @@ main() {
                     fi
                 fi
 
+                mark_task_failed "permission_denied"
                 break
             fi
 
@@ -1451,6 +1719,9 @@ main() {
             log_status "INFO" "  - Total loops: $loop_count"
             log_status "INFO" "  - API calls used: $(cat "$CALL_COUNT_FILE")"
             log_status "INFO" "  - Exit reason: $exit_reason"
+
+            # Move task to done/
+            mark_task_done
 
             break
         fi
@@ -1474,6 +1745,7 @@ main() {
             update_status "$loop_count" "$(cat "$CALL_COUNT_FILE")" "circuit_breaker_open" "halted" "stagnation_detected"
             log_status "ERROR" "🛑 Circuit breaker has opened - halting loop"
             log_status "INFO" "Run 'ralph --reset-circuit' to reset the circuit breaker after addressing issues"
+            mark_task_failed "circuit_breaker_trip"
             break
         elif [ $exec_result -eq 2 ]; then
             # API 5-hour limit reached - handle specially

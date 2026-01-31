@@ -18,8 +18,8 @@ REMOTE_CONTROL_ADAPTER="${REMOTE_CONTROL_ADAPTER:-}"  # telegram, slack, web, et
 REMOTE_CONTROL_POLL_INTERVAL="${REMOTE_CONTROL_POLL_INTERVAL:-5}"
 REMOTE_CONTROL_ASK_TIMEOUT="${REMOTE_CONTROL_ASK_TIMEOUT:-300}"
 
-# Registered adapters
-declare -A RC_ADAPTERS=()
+# Registered adapters (using dynamic variables for Bash 3.2 compatibility)
+# Instead of associative array, we use: RC_ADAPTER_<name>=prefix
 
 # ============================================================================
 # Adapter Registration
@@ -32,7 +32,8 @@ declare -A RC_ADAPTERS=()
 rc_register_adapter() {
     local name="$1"
     local prefix="${2:-${name}_}"
-    RC_ADAPTERS["$name"]="$prefix"
+    # Use eval for dynamic variable names (Bash 3.2 compatible)
+    eval "RC_ADAPTER_${name}=\"${prefix}\""
     echo "[remote_control] Registered adapter: $name (prefix: $prefix)"
 }
 
@@ -42,7 +43,9 @@ _rc_prefix() {
         echo ""
         return 1
     fi
-    echo "${RC_ADAPTERS[$REMOTE_CONTROL_ADAPTER]:-}"
+    # Use eval for dynamic variable lookup (Bash 3.2 compatible)
+    local var_name="RC_ADAPTER_${REMOTE_CONTROL_ADAPTER}"
+    eval "echo \"\${${var_name}:-}\""
 }
 
 # ============================================================================
