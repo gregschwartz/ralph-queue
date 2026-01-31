@@ -461,13 +461,11 @@ queue_skip() {
 # ============================================================================
 
 run_start() {
-    local max_iterations="${1:-$RALPH_LOOP_MAX_ITERATIONS}"
-    local max_tasks="${2:-0}"  # 0 = unlimited
+    local max_tasks="${1:-0}"  # 0 = unlimited
     local tasks_completed=0
     local tasks_failed=0
 
     echo -e "${BLUE}Starting ralph-tasks processing${NC}"
-    echo "  Max iterations per task: ${max_iterations}"
     echo "  Max tasks: ${max_tasks:-unlimited}"
     echo ""
 
@@ -516,7 +514,7 @@ run_start() {
 
         # Run Ralph on this task
         local ralph_exit_code=0
-        "$ralph_loop" --max-iterations "$max_iterations" || ralph_exit_code=$?
+        "$ralph_loop" || ralph_exit_code=$?
 
         # Check result
         # Look for TASK_COMPLETE in the response or check if Ralph exited cleanly
@@ -615,7 +613,6 @@ COMMANDS:
         --load            Load next task into PROMPT.md
 
     start                 Process all tasks automatically
-        --max-iterations  Max Ralph loops per task (default: 20)
         --max-tasks       Stop after N tasks (default: unlimited)
 
     failed [task-id]      Mark task as failed (moves to failed/)
@@ -815,15 +812,10 @@ main() {
             ;;
 
         start|run)
-            local max_iterations="$RALPH_LOOP_MAX_ITERATIONS"
             local max_tasks=0
 
             while [[ $# -gt 0 ]]; do
                 case "$1" in
-                    --max-iterations|-i)
-                        max_iterations="$2"
-                        shift 2
-                        ;;
                     --max-tasks|-t)
                         max_tasks="$2"
                         shift 2
@@ -834,7 +826,7 @@ main() {
                 esac
             done
 
-            run_start "$max_iterations" "$max_tasks"
+            run_start "$max_tasks"
             ;;
 
         failed|fail|f)
