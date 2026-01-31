@@ -20,6 +20,9 @@ RALPH_TASK_STORAGE="${RALPH_TASK_STORAGE:-directory}"  # directory, beads, githu
 RALPH_TASK_DIRS="${RALPH_TASK_DIRS:-}"  # Comma-separated directories for 'directory' backend
 RALPH_TASK_DEFAULT_PROJECT="${RALPH_TASK_DEFAULT_PROJECT:-}"
 RALPH_TASK_DONE_SUBDIR="${RALPH_TASK_DONE_SUBDIR:-done}"
+RALPH_TASK_FAILED_SUBDIR="${RALPH_TASK_FAILED_SUBDIR:-failed}"
+RALPH_LOOP_MAX_ITERATIONS="${RALPH_LOOP_MAX_ITERATIONS:-20}"
+RALPH_LOOP_SCRIPT="${RALPH_LOOP_SCRIPT:-$HOME/.ralph/ralph_loop.sh}"
 RALPH_DIR="${RALPH_DIR:-.ralph}"
 RALPH_TASK_CURRENT_FILE="${RALPH_DIR}/.current_task"
 RALPH_TASK_QUEUE_FILE="${RALPH_DIR}/.task_queue"
@@ -263,6 +266,62 @@ dir_done() {
     echo -e "${GREEN}Done:${NC} ${done_dir}/${new_name}"
 }
 
+dir_failed() {
+    local task_id="${1:-}"
+    local reason="${2:-max iterations reached}"
+
+    local file
+    if [[ -z "$task_id" ]]; then
+        # Use current task
+        if [[ -f "$RALPH_TASK_CURRENT_FILE" ]]; then
+            file=$(cat "$RALPH_TASK_CURRENT_FILE")
+        else
+            echo -e "${RED}No current task. Specify task ID.${NC}" >&2
+            return 1
+        fi
+    elif [[ -f "$task_id" ]]; then
+        file="$task_id"
+    else
+        file=$(find . -path "*tasks*${task_id}*" -name "*.md" -not -path "*/${RALPH_TASK_DONE_SUBDIR}/*" -not -path "*/${RALPH_TASK_FAILED_SUBDIR}/*" 2>/dev/null | head -1)
+    fi
+
+    if [[ -z "$file" || ! -f "$file" ]]; then
+        echo -e "${RED}Task not found:${NC} $task_id" >&2
+        return 1
+    fi
+
+    local task_dir
+    task_dir=$(dirname "$file")
+    local failed_dir="${task_dir}/${RALPH_TASK_FAILED_SUBDIR}"
+    mkdir -p "$failed_dir"
+
+    local basename
+    basename=$(basename "$file")
+    local date_prefix
+    date_prefix=$(date +%Y-%m-%d)
+    local new_name="${date_prefix}_${basename}"
+
+    # Append failure reason to the file
+    echo "" >> "$file"
+    echo "## Failed" >> "$file"
+    echo "**Date:** $(date)" >> "$file"
+    echo "**Reason:** ${reason}" >> "$file"
+
+    mv "$file" "${failed_dir}/${new_name}"
+
+    # Clear current task if it matches
+    if [[ -f "$RALPH_TASK_CURRENT_FILE" ]]; then
+        local current
+        current=$(cat "$RALPH_TASK_CURRENT_FILE")
+        if [[ "$current" == "$file" ]]; then
+            rm -f "$RALPH_TASK_CURRENT_FILE"
+        fi
+    fi
+
+    echo -e "${RED}Failed:${NC} ${failed_dir}/${new_name}"
+    echo -e "${YELLOW}Reason:${NC} ${reason}"
+}
+
 dir_count() {
     local project="${1:-}"
     local count=0
@@ -397,6 +456,128 @@ queue_skip() {
 }
 
 # ============================================================================
+# Main Loop - Process all tasks
+# ============================================================================
+
+run_loop() {
+    local max_iterations="${1:-$RALPH_LOOP_MAX_ITERATIONS}"
+    local max_tasks="${2:-0}"  # 0 = unlimited
+    local tasks_completed=0
+    local tasks_failed=0
+
+    echo -e "${BLUE}Starting ralph-task loop${NC}"
+    echo "  Max iterations per task: ${max_iterations}"
+    echo "  Max tasks: ${max_tasks:-unlimited}"
+    echo ""
+
+    # Find ralph_loop.sh
+    local ralph_loop=""
+    if [[ -x "$RALPH_LOOP_SCRIPT" ]]; then
+        ralph_loop="$RALPH_LOOP_SCRIPT"
+    elif [[ -x "./ralph_loop.sh" ]]; then
+        ralph_loop="./ralph_loop.sh"
+    elif command -v ralph &> /dev/null; then
+        ralph_loop="ralph"
+    else
+        echo -e "${RED}Error: Cannot find ralph_loop.sh or ralph command${NC}" >&2
+        echo "Set RALPH_LOOP_SCRIPT or ensure ralph is installed" >&2
+        return 1
+    fi
+
+    echo "Using: ${ralph_loop}"
+    echo ""
+
+    while true; do
+        # Check task limit
+        if [[ "$max_tasks" -gt 0 && "$tasks_completed" -ge "$max_tasks" ]]; then
+            echo -e "${GREEN}Reached max tasks limit (${max_tasks})${NC}"
+            break
+        fi
+
+        # Load next task
+        echo "=========================================="
+        echo -e "${BLUE}Loading next task...${NC}"
+
+        if ! queue_load; then
+            echo -e "${GREEN}No more tasks in queue!${NC}"
+            break
+        fi
+
+        local current_task
+        current_task=$(queue_current)
+        local task_title
+        task_title=$(grep -m1 '^# ' "$current_task" 2>/dev/null | sed 's/^# //' || basename "$current_task" .md)
+
+        echo ""
+        echo -e "${YELLOW}Working on:${NC} ${task_title}"
+        echo "=========================================="
+        echo ""
+
+        # Run Ralph on this task
+        local ralph_exit_code=0
+        "$ralph_loop" --max-iterations "$max_iterations" || ralph_exit_code=$?
+
+        # Check result
+        # Look for TASK_COMPLETE in the response or check if Ralph exited cleanly
+        local task_status="unknown"
+
+        if [[ -f "${RALPH_DIR}/.response_analysis" ]]; then
+            local exit_signal
+            exit_signal=$(jq -r '.analysis.exit_signal // "false"' "${RALPH_DIR}/.response_analysis" 2>/dev/null || echo "false")
+            local status
+            status=$(jq -r '.analysis.status // "unknown"' "${RALPH_DIR}/.response_analysis" 2>/dev/null || echo "unknown")
+
+            if [[ "$exit_signal" == "true" ]] || [[ "$status" == "COMPLETE" ]]; then
+                task_status="complete"
+            fi
+        fi
+
+        # Also check PROMPT.md output for TASK_COMPLETE signal
+        if [[ -f "${RALPH_DIR}/PROMPT.md" ]] && grep -q "TASK_COMPLETE" "${RALPH_DIR}/logs/"*.log 2>/dev/null; then
+            task_status="complete"
+        fi
+
+        echo ""
+        echo "=========================================="
+
+        if [[ "$task_status" == "complete" ]]; then
+            echo -e "${GREEN}Task completed!${NC}"
+            dir_done
+            ((tasks_completed++))
+        else
+            echo -e "${RED}Task did not complete (max iterations or blocked)${NC}"
+
+            # Ask what to do (if remote control available) or auto-fail
+            if [[ "${REMOTE_CONTROL_ENABLED:-false}" == "true" ]]; then
+                local response
+                response=$(rc_ask_yes_no "Task '${task_title}' didn't complete. Retry?" "no" 60)
+                if [[ "$response" == "yes" ]]; then
+                    echo "Retrying task..."
+                    continue
+                fi
+            fi
+
+            dir_failed "" "Max iterations (${max_iterations}) reached without completion"
+            ((tasks_failed++))
+        fi
+
+        echo ""
+        echo "Progress: ${tasks_completed} completed, ${tasks_failed} failed"
+        echo ""
+
+        # Small pause between tasks
+        sleep 2
+    done
+
+    echo ""
+    echo "=========================================="
+    echo -e "${GREEN}Loop complete!${NC}"
+    echo "  Tasks completed: ${tasks_completed}"
+    echo "  Tasks failed: ${tasks_failed}"
+    echo "=========================================="
+}
+
+# ============================================================================
 # Main CLI
 # ============================================================================
 
@@ -427,6 +608,12 @@ COMMANDS:
 
     queue                 Show queue status
         --load            Load next task into PROMPT.md
+
+    loop                  Process all tasks automatically
+        --max-iterations  Max Ralph loops per task (default: 20)
+        --max-tasks       Stop after N tasks (default: unlimited)
+
+    failed [task-id]      Mark task as failed (moves to failed/)
 
     count                 Count pending tasks
 
@@ -563,6 +750,33 @@ main() {
 
         count|c)
             dir_count "${1:-}"
+            ;;
+
+        loop|run)
+            local max_iterations="$RALPH_LOOP_MAX_ITERATIONS"
+            local max_tasks=0
+
+            while [[ $# -gt 0 ]]; do
+                case "$1" in
+                    --max-iterations|-i)
+                        max_iterations="$2"
+                        shift 2
+                        ;;
+                    --max-tasks|-t)
+                        max_tasks="$2"
+                        shift 2
+                        ;;
+                    *)
+                        shift
+                        ;;
+                esac
+            done
+
+            run_loop "$max_iterations" "$max_tasks"
+            ;;
+
+        failed|fail|f)
+            dir_failed "${1:-}" "${2:-}"
             ;;
 
         help|--help|-h)
