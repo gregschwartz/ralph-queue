@@ -1,5 +1,5 @@
 #!/bin/bash
-# install-ralph-task.sh - Install ralph-task CLI and set up aliases
+# install-ralph-task.sh - Install ralph-tasks CLI and set up aliases
 #
 # Usage: ./install-ralph-task.sh
 
@@ -20,13 +20,17 @@ detect_shell() {
     fi
 }
 
-# Install ralph-task to PATH
+# Install ralph-tasks to PATH
 install_binary() {
     mkdir -p "$INSTALL_DIR"
 
-    # Symlink ralph-task
-    ln -sf "${SCRIPT_DIR}/ralph-task" "${INSTALL_DIR}/ralph-task"
-    echo "✓ Installed: ${INSTALL_DIR}/ralph-task"
+    # Symlink ralph-tasks (primary command)
+    ln -sf "${SCRIPT_DIR}/ralph-tasks" "${INSTALL_DIR}/ralph-tasks"
+    echo "✓ Installed: ${INSTALL_DIR}/ralph-tasks"
+
+    # Symlink ralph-task (singular, for typos/muscle memory)
+    ln -sf "${SCRIPT_DIR}/ralph-tasks" "${INSTALL_DIR}/ralph-task"
+    echo "✓ Installed: ${INSTALL_DIR}/ralph-task (alias)"
 
     # Check if INSTALL_DIR is in PATH
     if [[ ":$PATH:" != *":${INSTALL_DIR}:"* ]]; then
@@ -43,14 +47,15 @@ install_binary() {
 install_aliases() {
     local aliases='
 # Ralph task management aliases
-alias rt="ralph-task"
-alias rta="ralph-task add"
-alias rtl="ralph-task list"
-alias rtn="ralph-task next"
-alias rtd="ralph-task done"
-alias rtq="ralph-task queue"'
+alias rt="ralph-tasks"
+alias rta="ralph-tasks add"
+alias rtl="ralph-tasks list"
+alias rtn="ralph-tasks next"
+alias rtd="ralph-tasks done"
+alias rtq="ralph-tasks queue"
+alias rts="ralph-tasks start"'
 
-    if grep -q "ralph-task" "$SHELL_RC" 2>/dev/null; then
+    if grep -q "Ralph task management aliases" "$SHELL_RC" 2>/dev/null; then
         echo "✓ Aliases already in ${SHELL_RC}"
         return
     fi
@@ -58,17 +63,18 @@ alias rtq="ralph-task queue"'
     echo "$aliases" >> "$SHELL_RC"
     echo "✓ Added aliases to ${SHELL_RC}"
     echo ""
-    echo "  rt   = ralph-task"
-    echo "  rta  = ralph-task add"
-    echo "  rtl  = ralph-task list"
-    echo "  rtn  = ralph-task next"
-    echo "  rtd  = ralph-task done"
-    echo "  rtq  = ralph-task queue"
+    echo "  rt   = ralph-tasks"
+    echo "  rta  = ralph-tasks add"
+    echo "  rtl  = ralph-tasks list"
+    echo "  rtn  = ralph-tasks next"
+    echo "  rtd  = ralph-tasks done"
+    echo "  rtq  = ralph-tasks queue"
+    echo "  rts  = ralph-tasks start"
 }
 
 # Main
 main() {
-    echo "Installing ralph-task..."
+    echo "Installing ralph-tasks..."
     echo ""
 
     detect_shell
@@ -85,9 +91,11 @@ main() {
     echo "Done! Run 'source ${SHELL_RC}' or open a new terminal."
     echo ""
     echo "Quick start:"
-    echo "  ralph-task add \"my first task\" -p h"
-    echo "  ralph-task list"
-    echo "  ralph-task queue --load"
+    echo "  ralph-tasks add h \"fix critical bug\""
+    echo "  ralph-tasks list"
+    echo "  ralph-tasks start"
+    echo ""
+    echo "Note: Both 'ralph-task' and 'ralph-tasks' work (installed as aliases)"
 }
 
 main "$@"

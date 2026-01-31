@@ -730,6 +730,7 @@ run_start() {
 usage() {
     cat << 'EOF'
 ralph-tasks - Unified task management for Ralph
+(also available as 'ralph-task' - both work!)
 
 USAGE:
     ralph-tasks [description]              Default: add medium priority task
