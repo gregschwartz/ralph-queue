@@ -95,13 +95,21 @@ dir_add() {
     mkdir -p "$task_dir"
     mkdir -p "${task_dir}/${RALPH_TASK_DONE_SUBDIR}"
 
-    # Generate filename
-    local timestamp
-    timestamp=$(date +%s)
+    # Generate filename with date format: H_2026-01-31_description.md
+    local date_str
+    date_str=$(date +%Y-%m-%d)
     local slug
-    slug=$(echo "$description" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/_/g' | sed 's/_\{1,\}/_/g' | sed 's/^_//;s/_$//' | cut -c1-40)
-    local filename="${priority}_${timestamp}_${slug}.md"
+    slug=$(echo "$description" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/_/g' | sed 's/_\{1,\}/_/g' | sed 's/^_//;s/_$//' | cut -c1-50)
+    local filename="${priority}_${date_str}_${slug}.md"
     local filepath="${task_dir}/${filename}"
+
+    # If file exists, append a counter
+    local counter=1
+    while [[ -f "$filepath" ]]; do
+        filename="${priority}_${date_str}_${slug}_${counter}.md"
+        filepath="${task_dir}/${filename}"
+        ((counter++))
+    done
 
     # Create task file
     cat > "$filepath" << EOF
@@ -368,8 +376,12 @@ queue_build() {
             fi
             for dir in $dirs; do
                 if [[ -d "$dir" ]]; then
-                    # Match both formats: H_*.md, H-*.md, and date_H_*.md
-                    ls -1 "$dir"/${pri}_*.md "$dir"/${pri}-*.md "$dir"/*_${pri}_*.md 2>/dev/null | sort -u
+                    # Match all formats: H_*.md, H-*.md, H_YYYY-MM-DD_*.md, YYYY-MM-DD_H_*.md
+                    find "$dir" -maxdepth 1 -type f \( \
+                        -name "${pri}_*.md" -o \
+                        -name "${pri}-*.md" -o \
+                        -name "*_${pri}_*.md" \
+                    \) 2>/dev/null | sort -u
                 fi
             done
         )
@@ -848,6 +860,28 @@ main() {
             local description=""
             local priority="M"
             local project=""
+            local first_arg_is_priority=false
+
+            # Check if first argument is a priority shorthand
+            if [[ $# -gt 0 ]]; then
+                case "$1" in
+                    h|H|high)
+                        priority="H"
+                        first_arg_is_priority=true
+                        shift
+                        ;;
+                    m|M|med|medium)
+                        priority="M"
+                        first_arg_is_priority=true
+                        shift
+                        ;;
+                    l|L|low)
+                        priority="L"
+                        first_arg_is_priority=true
+                        shift
+                        ;;
+                esac
+            fi
 
             while [[ $# -gt 0 ]]; do
                 case "$1" in
