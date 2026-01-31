@@ -460,41 +460,69 @@ queue_skip() {
 }
 
 # ============================================================================
-# Task Attempt Tracking
+# Task Attempt Tracking (in task file itself)
 # ============================================================================
 
 get_task_attempts() {
     local task_file="$1"
-    mkdir -p "$RALPH_DIR"
-    touch "$RALPH_TASK_ATTEMPTS_FILE"
 
-    grep "^${task_file}:" "$RALPH_TASK_ATTEMPTS_FILE" 2>/dev/null | cut -d: -f2 || echo "0"
+    if [[ ! -f "$task_file" ]]; then
+        echo "0"
+        return
+    fi
+
+    # Count attempts logged in the file
+    grep -c "^- \*\*Attempt [0-9]*\*\*:" "$task_file" 2>/dev/null || echo "0"
 }
 
-increment_task_attempts() {
+log_task_attempt() {
     local task_file="$1"
-    local current_attempts
-    current_attempts=$(get_task_attempts "$task_file")
-    local new_attempts=$((current_attempts + 1))
+    local attempt_num="$2"
+    local reason="$3"
+    local exit_code="${4:-unknown}"
 
-    mkdir -p "$RALPH_DIR"
-    touch "$RALPH_TASK_ATTEMPTS_FILE"
+    if [[ ! -f "$task_file" ]]; then
+        return 1
+    fi
 
-    # Remove old entry if exists
-    grep -v "^${task_file}:" "$RALPH_TASK_ATTEMPTS_FILE" > "${RALPH_TASK_ATTEMPTS_FILE}.tmp" 2>/dev/null || true
-    echo "${task_file}:${new_attempts}" >> "${RALPH_TASK_ATTEMPTS_FILE}.tmp"
-    mv "${RALPH_TASK_ATTEMPTS_FILE}.tmp" "$RALPH_TASK_ATTEMPTS_FILE"
+    # Ensure Attempts section exists
+    if ! grep -q "^## Attempts" "$task_file"; then
+        echo "" >> "$task_file"
+        echo "## Attempts" >> "$task_file"
+    fi
 
-    echo "$new_attempts"
+    # Log this attempt
+    local timestamp
+    timestamp=$(date "+%Y-%m-%d %H:%M:%S")
+
+    # Append after the ## Attempts header
+    local temp_file="${task_file}.tmp"
+    awk -v ts="$timestamp" -v num="$attempt_num" -v reason="$reason" -v code="$exit_code" '
+        /^## Attempts/ {
+            print
+            print "- **Attempt " num "**: " ts
+            if (code != "unknown") {
+                print "  - Exit code: " code
+            }
+            print "  - Reason: " reason
+            print ""
+            attempts_section = 1
+            next
+        }
+        attempts_section && /^## / { attempts_section = 0 }
+        { print }
+    ' "$task_file" > "$temp_file"
+
+    mv "$temp_file" "$task_file"
+
+    echo "$attempt_num"
 }
 
 clear_task_attempts() {
     local task_file="$1"
-    mkdir -p "$RALPH_DIR"
-    touch "$RALPH_TASK_ATTEMPTS_FILE"
-
-    grep -v "^${task_file}:" "$RALPH_TASK_ATTEMPTS_FILE" > "${RALPH_TASK_ATTEMPTS_FILE}.tmp" 2>/dev/null || true
-    mv "${RALPH_TASK_ATTEMPTS_FILE}.tmp" "$RALPH_TASK_ATTEMPTS_FILE"
+    # Attempts are kept in the file for history - no need to clear
+    # This function kept for compatibility but does nothing
+    :
 }
 
 # ============================================================================
@@ -549,13 +577,12 @@ run_start() {
         task_title=$(grep -m1 '^# ' "$current_task" 2>/dev/null | sed 's/^# //' || basename "$current_task" .md)
 
         # Track attempts for this task
-        local attempts
-        attempts=$(get_task_attempts "$current_task")
-        local new_attempts
-        new_attempts=$(increment_task_attempts "$current_task")
+        local current_attempts
+        current_attempts=$(get_task_attempts "$current_task")
+        local new_attempt_num=$((current_attempts + 1))
 
         echo ""
-        echo -e "${YELLOW}Working on:${NC} ${task_title} ${BLUE}(attempt ${new_attempts}/${RALPH_TASK_MAX_ATTEMPTS})${NC}"
+        echo -e "${YELLOW}Working on:${NC} ${task_title} ${BLUE}(attempt ${new_attempt_num}/${RALPH_TASK_MAX_ATTEMPTS})${NC}"
         echo "=========================================="
         echo ""
 
@@ -568,10 +595,12 @@ run_start() {
 
         # Check result
         local task_status="unknown"
+        local failure_reason=""
 
         # If ralph_loop failed to run, mark as failed immediately
         if [[ "$ralph_exit_code" -ne 0 ]]; then
             task_status="failed"
+            failure_reason="ralph_loop.sh exited with code ${ralph_exit_code}"
         else
             # Ralph ran successfully - check if task was completed
             if [[ -f "${RALPH_DIR}/.response_analysis" ]]; then
@@ -582,7 +611,11 @@ run_start() {
 
                 if [[ "$exit_signal" == "true" ]] || [[ "$status" == "COMPLETE" ]]; then
                     task_status="complete"
+                else
+                    failure_reason="Task did not signal completion (status: ${status})"
                 fi
+            else
+                failure_reason="No response analysis found"
             fi
 
             # Also check PROMPT.md output for TASK_COMPLETE signal
@@ -596,19 +629,18 @@ run_start() {
 
         if [[ "$task_status" == "complete" ]]; then
             echo -e "${GREEN}Task completed!${NC}"
-            clear_task_attempts "$current_task"
+            # Log successful completion
+            log_task_attempt "$current_task" "$new_attempt_num" "Completed successfully" "0"
             dir_done
             ((tasks_completed++))
         else
-            # Task failed - check if we should retry
-            if [[ "$new_attempts" -lt "$RALPH_TASK_MAX_ATTEMPTS" ]]; then
-                # Still have retries left - add task back to queue
-                if [[ "$ralph_exit_code" -ne 0 ]]; then
-                    echo -e "${YELLOW}Task failed (attempt ${new_attempts}/${RALPH_TASK_MAX_ATTEMPTS}): ralph_loop.sh exited with code ${ralph_exit_code}${NC}"
-                else
-                    echo -e "${YELLOW}Task did not complete (attempt ${new_attempts}/${RALPH_TASK_MAX_ATTEMPTS})${NC}"
-                fi
+            # Log the failed attempt
+            log_task_attempt "$current_task" "$new_attempt_num" "$failure_reason" "$ralph_exit_code"
 
+            # Task failed - check if we should retry
+            if [[ "$new_attempt_num" -lt "$RALPH_TASK_MAX_ATTEMPTS" ]]; then
+                # Still have retries left - add task back to queue
+                echo -e "${YELLOW}Task failed (attempt ${new_attempt_num}/${RALPH_TASK_MAX_ATTEMPTS}): ${failure_reason}${NC}"
                 echo -e "${BLUE}Adding task back to queue for retry...${NC}"
                 echo "$current_task" >> "$RALPH_TASK_QUEUE_FILE"
                 rm -f "$RALPH_TASK_CURRENT_FILE"
@@ -618,14 +650,7 @@ run_start() {
             else
                 # Max attempts reached - move to failed
                 echo -e "${RED}Task failed after ${RALPH_TASK_MAX_ATTEMPTS} attempts${NC}"
-
-                if [[ "$ralph_exit_code" -ne 0 ]]; then
-                    dir_failed "" "ralph_loop.sh failed with exit code ${ralph_exit_code} after ${RALPH_TASK_MAX_ATTEMPTS} attempts"
-                else
-                    dir_failed "" "Task did not complete within timeout after ${RALPH_TASK_MAX_ATTEMPTS} attempts"
-                fi
-
-                clear_task_attempts "$current_task"
+                dir_failed "" "Failed after ${RALPH_TASK_MAX_ATTEMPTS} attempts. See task file for attempt history."
                 ((tasks_failed++))
             fi
         fi

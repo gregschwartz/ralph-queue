@@ -94,9 +94,15 @@ telegram_init() {
 telegram_send() {
     local message="$1"
     local parse_mode="${2:-}"  # Optional: "Markdown" or "HTML"
+    local delay="${3:-5}"      # Default 5s delay to see on screen
 
     if [[ "$TELEGRAM_ENABLED" != "true" ]]; then
         return 0
+    fi
+
+    # Wait so user can see action on screen first
+    if [[ "$delay" -gt 0 ]]; then
+        sleep "$delay"
     fi
 
     local data="chat_id=${TELEGRAM_CHAT_ID}&text=${message}"
@@ -622,6 +628,163 @@ _telegram_register() {
             REMOTE_CONTROL_ASK_TIMEOUT="$TELEGRAM_ASK_TIMEOUT"
         fi
     fi
+}
+
+# ============================================================================
+# Task Management Commands
+# ============================================================================
+
+# Handle /add commands for tasks
+telegram_handle_add_command() {
+    local message="$1"
+
+    # Check if it's an add command
+    if [[ ! "$message" =~ ^/add ]]; then
+        return 1
+    fi
+
+    local priority=""
+    local description=""
+
+    # Parse command
+    if [[ "$message" =~ ^/add-high[[:space:]]+(.*) ]] || [[ "$message" =~ ^/add-h[[:space:]]+(.*) ]]; then
+        priority="H"
+        description="${BASH_REMATCH[1]}"
+    elif [[ "$message" =~ ^/add-med[[:space:]]+(.*) ]] || [[ "$message" =~ ^/add-m[[:space:]]+(.*) ]]; then
+        priority="M"
+        description="${BASH_REMATCH[1]}"
+    elif [[ "$message" =~ ^/add-low[[:space:]]+(.*) ]] || [[ "$message" =~ ^/add-l[[:space:]]+(.*) ]]; then
+        priority="L"
+        description="${BASH_REMATCH[1]}"
+    elif [[ "$message" =~ ^/add[[:space:]]+(.*) ]]; then
+        # Generic /add - need to ask for priority
+        description="${BASH_REMATCH[1]}"
+        priority=""  # Will ask
+    else
+        return 1
+    fi
+
+    # If no description, error
+    if [[ -z "$description" ]]; then
+        telegram_send "❌ Error: Task description required
+
+Usage:
+/add-high <description>
+/add-med <description>
+/add-low <description>
+or
+/add <description> (will ask for priority)"
+        return 1
+    fi
+
+    # Ask for priority if not specified
+    if [[ -z "$priority" ]]; then
+        telegram_poll > /dev/null 2>&1  # Clear pending
+        telegram_send_buttons "Select priority for: ${description}" \
+            "🔴 High:/high" \
+            "🟡 Medium:/med" \
+            "🔵 Low:/low"
+
+        local response
+        response=$(telegram_wait_for_callback 60)
+
+        case "$(echo "$response" | tr '[:upper:]' '[:lower:]')" in
+            /high|high|h) priority="H" ;;
+            /med|medium|m) priority="M" ;;
+            /low|low|l) priority="L" ;;
+            timeout)
+                telegram_send "⏱️ Timeout - defaulting to Medium priority"
+                priority="M"
+                ;;
+            *)
+                telegram_send "❓ Unknown response - defaulting to Medium priority"
+                priority="M"
+                ;;
+        esac
+    fi
+
+    # Add the task using ralph-tasks
+    local task_file
+    if command -v ralph-tasks &> /dev/null; then
+        task_file=$(ralph-tasks add "$description" -p "$priority" 2>&1 | tail -1)
+
+        local pri_emoji
+        case "$priority" in
+            H) pri_emoji="🔴" ;;
+            M) pri_emoji="🟡" ;;
+            L) pri_emoji="🔵" ;;
+        esac
+
+        telegram_send "✅ Task added ${pri_emoji}
+
+Priority: ${priority}
+Description: ${description}
+
+File: ${task_file}"
+    else
+        telegram_send "❌ Error: ralph-tasks command not found"
+        return 1
+    fi
+
+    return 0
+}
+
+# Process incoming Telegram messages for commands
+telegram_process_commands() {
+    if [[ "$TELEGRAM_ENABLED" != "true" ]]; then
+        return 0
+    fi
+
+    local message
+    message=$(telegram_get_latest_message)
+
+    if [[ -z "$message" || "$message" == "null" ]]; then
+        return 0
+    fi
+
+    # Handle /add commands
+    if telegram_handle_add_command "$message"; then
+        return 0
+    fi
+
+    # Add more command handlers here in the future
+    # telegram_handle_list_command "$message"
+    # telegram_handle_status_command "$message"
+
+    return 0
+}
+
+# Send persistent keyboard with task management buttons
+telegram_send_task_menu() {
+    if [[ "$TELEGRAM_ENABLED" != "true" ]]; then
+        return 0
+    fi
+
+    # Reply keyboard (persistent buttons at bottom of chat)
+    local keyboard='{
+        "keyboard": [
+            [{"text": "/add-high"}, {"text": "/add-med"}, {"text": "/add-low"}],
+            [{"text": "/list"}, {"text": "/status"}, {"text": "/help"}]
+        ],
+        "resize_keyboard": true,
+        "persistent": true
+    }'
+
+    local response
+    response=$(curl -s "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+        -H "Content-Type: application/json" \
+        -d "{
+            \"chat_id\": \"${TELEGRAM_CHAT_ID}\",
+            \"text\": \"📋 Task Management Menu\n\nQuick add commands:\n• /add-high - Add high priority task\n• /add-med - Add medium priority task\n• /add-low - Add low priority task\n\nOr use /add <description> to choose priority\",
+            \"reply_markup\": ${keyboard}
+        }")
+
+    if ! echo "$response" | jq -e '.ok' > /dev/null 2>&1; then
+        echo "[telegram] Failed to send task menu: $response" >&2
+        return 1
+    fi
+
+    return 0
 }
 
 # Auto-register on source
