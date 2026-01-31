@@ -512,28 +512,36 @@ run_start() {
         echo "=========================================="
         echo ""
 
+        # Clear any stale response analysis from previous runs
+        rm -f "${RALPH_DIR}/.response_analysis"
+
         # Run Ralph on this task
         local ralph_exit_code=0
         "$ralph_loop" || ralph_exit_code=$?
 
         # Check result
-        # Look for TASK_COMPLETE in the response or check if Ralph exited cleanly
         local task_status="unknown"
 
-        if [[ -f "${RALPH_DIR}/.response_analysis" ]]; then
-            local exit_signal
-            exit_signal=$(jq -r '.analysis.exit_signal // "false"' "${RALPH_DIR}/.response_analysis" 2>/dev/null || echo "false")
-            local status
-            status=$(jq -r '.analysis.status // "unknown"' "${RALPH_DIR}/.response_analysis" 2>/dev/null || echo "unknown")
+        # If ralph_loop failed to run, mark as failed immediately
+        if [[ "$ralph_exit_code" -ne 0 ]]; then
+            task_status="failed"
+        else
+            # Ralph ran successfully - check if task was completed
+            if [[ -f "${RALPH_DIR}/.response_analysis" ]]; then
+                local exit_signal
+                exit_signal=$(jq -r '.analysis.exit_signal // "false"' "${RALPH_DIR}/.response_analysis" 2>/dev/null || echo "false")
+                local status
+                status=$(jq -r '.analysis.status // "unknown"' "${RALPH_DIR}/.response_analysis" 2>/dev/null || echo "unknown")
 
-            if [[ "$exit_signal" == "true" ]] || [[ "$status" == "COMPLETE" ]]; then
+                if [[ "$exit_signal" == "true" ]] || [[ "$status" == "COMPLETE" ]]; then
+                    task_status="complete"
+                fi
+            fi
+
+            # Also check PROMPT.md output for TASK_COMPLETE signal
+            if [[ -f "${RALPH_DIR}/PROMPT.md" ]] && grep -q "TASK_COMPLETE" "${RALPH_DIR}/logs/"*.log 2>/dev/null; then
                 task_status="complete"
             fi
-        fi
-
-        # Also check PROMPT.md output for TASK_COMPLETE signal
-        if [[ -f "${RALPH_DIR}/PROMPT.md" ]] && grep -q "TASK_COMPLETE" "${RALPH_DIR}/logs/"*.log 2>/dev/null; then
-            task_status="complete"
         fi
 
         echo ""
@@ -544,19 +552,24 @@ run_start() {
             dir_done
             ((tasks_completed++))
         else
-            echo -e "${RED}Task did not complete (max iterations or blocked)${NC}"
+            if [[ "$ralph_exit_code" -ne 0 ]]; then
+                echo -e "${RED}Task failed: ralph_loop.sh exited with code ${ralph_exit_code}${NC}"
+                dir_failed "" "ralph_loop.sh failed with exit code ${ralph_exit_code}"
+            else
+                echo -e "${RED}Task did not complete (timeout or blocked)${NC}"
 
-            # Ask what to do (if remote control available) or auto-fail
-            if [[ "${REMOTE_CONTROL_ENABLED:-false}" == "true" ]]; then
-                local response
-                response=$(rc_ask_yes_no "Task '${task_title}' didn't complete. Retry?" "no" 60)
-                if [[ "$response" == "yes" ]]; then
-                    echo "Retrying task..."
-                    continue
+                # Ask what to do (if remote control available) or auto-fail
+                if [[ "${REMOTE_CONTROL_ENABLED:-false}" == "true" ]]; then
+                    local response
+                    response=$(rc_ask_yes_no "Task '${task_title}' didn't complete. Retry?" "no" 60)
+                    if [[ "$response" == "yes" ]]; then
+                        echo "Retrying task..."
+                        continue
+                    fi
                 fi
-            fi
 
-            dir_failed "" "Max iterations (${max_iterations}) reached without completion"
+                dir_failed "" "Task did not complete within timeout"
+            fi
             ((tasks_failed++))
         fi
 
