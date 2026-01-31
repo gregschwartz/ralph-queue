@@ -372,7 +372,12 @@ queue_build() {
         )
     done
 
-    printf '%s\n' "${queue[@]}" > "$RALPH_TASK_QUEUE_FILE"
+    # Write queue to file (handle empty array safely)
+    if [[ ${#queue[@]} -gt 0 ]]; then
+        printf '%s\n' "${queue[@]}" > "$RALPH_TASK_QUEUE_FILE"
+    else
+        > "$RALPH_TASK_QUEUE_FILE"  # Create empty file
+    fi
     echo "${#queue[@]}"
 }
 
