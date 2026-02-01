@@ -376,11 +376,12 @@ queue_build() {
             fi
             for dir in $dirs; do
                 if [[ -d "$dir" ]]; then
-                    # Match all formats: H_*.md, H-*.md, H_YYYY-MM-DD_*.md, YYYY-MM-DD_H_*.md
+                    # Match all formats: H_*.md, H-*.md, H_YYYY-MM-DD_*.md, YYYY-MM-DD_H_*.md, YYYY-MM-DD_H-*.md
                     find "$dir" -maxdepth 1 -type f \( \
                         -name "${pri}_*.md" -o \
                         -name "${pri}-*.md" -o \
-                        -name "*_${pri}_*.md" \
+                        -name "*_${pri}_*.md" -o \
+                        -name "*_${pri}-*.md" \
                     \) 2>/dev/null | sort -u
                 fi
             done
@@ -1026,9 +1027,15 @@ main() {
                 esac
             done
 
-            # Log to both screen and file
+            # Log to file only (avoid broken pipe issues with tee)
             echo "Logging to: $log_file"
-            run_start "$max_tasks" 2>&1 | tee "$log_file"
+            echo "Run 'tail -f $log_file' in another terminal to watch progress"
+            run_start "$max_tasks" > "$log_file" 2>&1
+            local run_exit=$?
+            echo ""
+            echo "=== Final output (last 50 lines) ==="
+            tail -50 "$log_file"
+            return $run_exit
             ;;
 
         failed|fail|f)
