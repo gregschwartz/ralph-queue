@@ -1,0 +1,35 @@
+--- a/ralph-tasks
++++ b/ralph-tasks
+@@ -517,22 +517,13 @@ log_task_attempt() {
+     local timestamp
+     timestamp=$(date "+%Y-%m-%d %H:%M:%S")
+
+-    # Append after the ## Attempts header
+-    local temp_file="${task_file}.tmp"
+-    awk -v ts="$timestamp" -v num="$attempt_num" -v error="$error_msg" -v why_text="$why" '
+-        /^## Attempts/ {
+-            print
+-            print "- **Attempt " num "**: " ts
+-            print "  - Error: " error
+-            if (why_text != "") {
+-                print "  - Why: " why_text
+-            }
+-            print ""
+-            attempts_section = 1
+-            next
+-        }
+-        attempts_section && /^## / { attempts_section = 0 }
+-        { print }
+-    ' "$task_file" > "$temp_file"
+-
+-    mv "$temp_file" "$task_file"
++    # Append at end of file (simpler and maintains chronological order)
++    {
++        echo ""
++        echo "- **Attempt ${attempt_num}**: ${timestamp}"
++        echo "  - Error: ${error_msg}"
++        if [[ -n "$why" ]]; then
++            echo "  - Why: ${why}"
++        fi
++    } >> "$task_file"
+ }

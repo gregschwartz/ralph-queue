@@ -1,0 +1,40 @@
+--- a/ralph-tasks
++++ b/ralph-tasks
+@@ -718,20 +718,28 @@ run_start() {
+             # Task failed - check if we should retry
+             if [[ "$new_attempt_num" -lt "$RALPH_TASK_MAX_ATTEMPTS" ]]; then
+-                # Still have retries left - add task back to queue
++                # Still have retries left
+                 echo -e "${YELLOW}Task failed (attempt ${new_attempt_num}/${RALPH_TASK_MAX_ATTEMPTS})${NC}"
+                 echo -e "${RED}Error:${NC} ${error_msg}"
+                 if [[ -n "$why_failed" ]]; then
+                     echo -e "${BLUE}Why:${NC} ${why_failed}"
+                 fi
+-                echo -e "${BLUE}Adding task back to queue for retry...${NC}"
+-                echo "$current_task" >> "$RALPH_TASK_QUEUE_FILE"
++                echo -e "${BLUE}Will retry later...${NC}"
++
++                # Clear current task pointer
+                 rm -f "$RALPH_TASK_CURRENT_FILE"
+
+-                # Continue to next task (this one will be retried later)
++                # Remove any duplicate entries, then add task once at end of queue
++                if [[ -f "$RALPH_TASK_QUEUE_FILE" ]]; then
++                    grep -v "^${current_task}$" "$RALPH_TASK_QUEUE_FILE" > "${RALPH_TASK_QUEUE_FILE}.tmp" 2>/dev/null || true
++                    mv "${RALPH_TASK_QUEUE_FILE}.tmp" "$RALPH_TASK_QUEUE_FILE"
++                fi
++                echo "$current_task" >> "$RALPH_TASK_QUEUE_FILE"
++
+                 echo "Moving to next task..."
+             else
+                 # Max attempts reached - move to failed
+@@ -742,8 +750,9 @@ run_start() {
+                 fi
+                 dir_failed "" "Failed after ${RALPH_TASK_MAX_ATTEMPTS} attempts. See task file for attempt history."
+                 ((tasks_failed++))
+-                # Rebuild queue to remove the moved task
++
++                # Rebuild queue from scratch to ensure clean state
++                rm -f "$RALPH_TASK_QUEUE_FILE" "$RALPH_TASK_CURRENT_FILE"
+                 queue_build > /dev/null
+             fi

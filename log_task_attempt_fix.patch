@@ -1,0 +1,9 @@
+--- a/ralph-tasks
++++ b/ralph-tasks
+@@ -538,8 +538,6 @@ log_task_attempt() {
+     ' "$task_file" > "$temp_file"
+
+     mv "$temp_file" "$task_file"
+-
+-    echo "$attempt_num"
+ }

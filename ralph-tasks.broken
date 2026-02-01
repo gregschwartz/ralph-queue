@@ -274,13 +274,6 @@ dir_done() {
         fi
     fi
 
-    # Remove this task from the queue file if present
-    if [[ -f "$RALPH_TASK_QUEUE_FILE" ]]; then
-        local temp_queue="${RALPH_TASK_QUEUE_FILE}.tmp"
-        grep -v "^${file}$" "$RALPH_TASK_QUEUE_FILE" > "$temp_queue" 2>/dev/null || true
-        mv "$temp_queue" "$RALPH_TASK_QUEUE_FILE"
-    fi
-
     echo -e "${GREEN}Done:${NC} ${done_dir}/${new_name}"
 }
 
@@ -525,15 +518,27 @@ log_task_attempt() {
     local timestamp
     timestamp=$(date "+%Y-%m-%d %H:%M:%S")
 
-    # Append at end of file (simpler, maintains chronological order)
-    {
-        echo ""
-        echo "- **Attempt ${attempt_num}**: ${timestamp}"
-        echo "  - Error: ${error_msg}"
-        if [[ -n "$why" ]]; then
-            echo "  - Why: ${why}"
-        fi
-    } >> "$task_file"
+    # Append after the ## Attempts header
+    local temp_file="${task_file}.tmp"
+    awk -v ts="$timestamp" -v num="$attempt_num" -v error="$error_msg" -v why_text="$why" '
+        /^## Attempts/ {
+            print
+            print "- **Attempt " num "**: " ts
+            print "  - Error: " error
+            if (why_text != "") {
+                print "  - Why: " why_text
+            }
+            print ""
+            attempts_section = 1
+            next
+        }
+        attempts_section && /^## / { attempts_section = 0 }
+        { print }
+    ' "$task_file" > "$temp_file"
+
+    mv "$temp_file" "$task_file"
+
+    echo "$attempt_num"
 }
 
 clear_task_attempts() {
@@ -683,16 +688,9 @@ run_start() {
                 fi
             else
                 echo "DEBUG: No .response_analysis file found"
-                # Check if circuit breaker is open
-                if grep -q "Circuit Breaker.*OPEN\|circuit_breaker_open\|EXECUTION HALTED" "$ralph_output_file" 2>/dev/null; then
-                    task_status="blocked"
-                    error_msg="Circuit breaker is open"
-                    why_failed="Ralph's circuit breaker has tripped (likely due to repeated failures or no progress). Run 'ralph --reset-circuit' to reset it, then retry."
-                else
-                    task_status="failed"
-                    error_msg="No response analysis found"
-                    why_failed="ralph_loop.sh ran but didn't produce expected output files. May indicate a configuration issue."
-                fi
+                task_status="failed"
+                error_msg="No response analysis found"
+                why_failed="ralph_loop.sh ran but didn't produce expected output files. May indicate a configuration issue."
             fi
 
             # Also check current run's output for TASK_COMPLETE signal
