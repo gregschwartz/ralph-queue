@@ -685,9 +685,9 @@ run_start() {
                 why_failed="ralph_loop.sh ran but didn't produce expected output files. May indicate a configuration issue."
             fi
 
-            # Also check PROMPT.md output for TASK_COMPLETE signal
-            if [[ -f "${RALPH_DIR}/PROMPT.md" ]] && grep -q "TASK_COMPLETE" "${RALPH_DIR}/logs/"*.log 2>/dev/null; then
-                echo "DEBUG: Found TASK_COMPLETE in logs, marking as complete"
+            # Also check current run's output for TASK_COMPLETE signal
+            if grep -q "TASK_COMPLETE" "$ralph_output_file" 2>/dev/null; then
+                echo "DEBUG: Found TASK_COMPLETE in current output, marking as complete"
                 task_status="complete"
             fi
         fi
