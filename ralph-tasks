@@ -604,6 +604,15 @@ run_start() {
         current_attempts=$(get_task_attempts "$current_task")
         local new_attempt_num=$((current_attempts + 1))
 
+        # Check if task has already exhausted retries
+        if [[ "$current_attempts" -ge "$RALPH_TASK_MAX_ATTEMPTS" ]]; then
+            echo ""
+            echo -e "${RED}Skipping:${NC} ${task_title} ${BLUE}(already failed ${current_attempts} times)${NC}"
+            dir_failed "" "Task already failed ${current_attempts} times in previous runs."
+            ((tasks_failed++))
+            continue
+        fi
+
         echo ""
         echo -e "${YELLOW}Working on:${NC} ${task_title} ${BLUE}(attempt ${new_attempt_num}/${RALPH_TASK_MAX_ATTEMPTS})${NC}"
         echo "=========================================="
