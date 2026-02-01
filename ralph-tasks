@@ -422,6 +422,14 @@ queue_load() {
         return 1
     fi
 
+    # Skip stale entries (task moved to done/failed)
+    if [[ ! -f "$task" ]]; then
+        echo -e "${YELLOW}Skipping stale:${NC} $task"
+        sed -i '' "1d" "$RALPH_TASK_QUEUE_FILE" 2>/dev/null || sed -i "1d" "$RALPH_TASK_QUEUE_FILE"
+        queue_load
+        return $?
+    fi
+
     # Save as current task
     echo "$task" > "$RALPH_TASK_CURRENT_FILE"
 
