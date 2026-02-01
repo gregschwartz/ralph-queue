@@ -19,7 +19,7 @@ NC='\033[0m'
 RALPH_DIR="${RALPH_DIR:-.ralph}"
 
 # Analysis configuration
-COMPLETION_KEYWORDS=("done" "complete" "finished" "all tasks complete" "project complete" "ready for review")
+COMPLETION_KEYWORDS=("done" "complete" "finished" "all tasks complete" "project complete" "ready for review" "TASK_COMPLETE" "task_complete")
 TEST_ONLY_PATTERNS=("npm test" "bats" "pytest" "jest" "cargo test" "go test" "running tests")
 NO_WORK_PATTERNS=("nothing to do" "no changes" "already implemented" "up to date")
 
@@ -165,6 +165,15 @@ parse_json_response() {
 
     # Summary: from flat format OR from result field (Claude CLI format)
     local summary=$(jq -r '.result // .summary // ""' "$output_file" 2>/dev/null)
+
+    # Bug #2 Fix: Detect TASK_COMPLETE in result/summary text (explicit completion marker)
+    # This handles cases where Claude signals completion via text rather than RALPH_STATUS block
+    if [[ "$exit_signal" == "false" && -n "$summary" ]]; then
+        if echo "$summary" | grep -qi "TASK_COMPLETE"; then
+            exit_signal="true"
+            [[ "${VERBOSE_PROGRESS:-}" == "true" ]] && echo "DEBUG: Detected TASK_COMPLETE in result text, setting exit_signal=true" >&2
+        fi
+    fi
 
     # Session ID: from Claude CLI format (sessionId) OR from metadata.session_id
     local session_id=$(jq -r '.sessionId // .metadata.session_id // ""' "$output_file" 2>/dev/null)
@@ -429,6 +438,11 @@ analyze_response() {
         if grep -qi "$keyword" "$output_file"; then
             has_completion_signal=true
             ((confidence_score+=10))
+            # TASK_COMPLETE is an explicit completion marker - set exit_signal
+            if [[ "$keyword" == "TASK_COMPLETE" || "$keyword" == "task_complete" ]]; then
+                exit_signal=true
+                confidence_score=100
+            fi
             break
         fi
     done
