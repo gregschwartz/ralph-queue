@@ -621,13 +621,12 @@ run_start() {
         local ralph_exit_code=0
 
         # Run ralph and capture exit code properly
+        echo "DEBUG: [$(date '+%H:%M:%S')] Starting ralph_loop..."
         set +e  # Disable exit on error temporarily
         "$ralph_loop" > "$ralph_output_file" 2>&1
         ralph_exit_code=$?
         set -e  # Re-enable exit on error
-
-        # DEBUG: Always show exit code
-        echo "DEBUG: ralph_loop exit code = $ralph_exit_code"
+        echo "DEBUG: [$(date '+%H:%M:%S')] ralph_loop finished, exit code = $ralph_exit_code"
 
         # Check result
         local task_status="unknown"
@@ -696,8 +695,8 @@ run_start() {
             fi
 
             # Also check current run's output for TASK_COMPLETE signal
-            # But ONLY if .response_analysis existed (meaning ralph ran properly)
-            if [[ -f "${RALPH_DIR}/.response_analysis" ]] && grep -q "TASK_COMPLETE" "$ralph_output_file" 2>/dev/null; then
+            # Only check if exit code was 0 AND .response_analysis exists (meaning Claude ran and completed)
+            if [[ "$ralph_exit_code" -eq 0 ]] && [[ -f "${RALPH_DIR}/.response_analysis" ]] && grep -q "TASK_COMPLETE" "$ralph_output_file" 2>/dev/null; then
                 echo "DEBUG: Found TASK_COMPLETE in current output, marking as complete"
                 task_status="complete"
             fi
@@ -1040,7 +1039,7 @@ main() {
             # Log to file only (avoid broken pipe issues with tee)
             echo "Logging to: $log_file"
             echo "Run 'tail -f $log_file' in another terminal to watch progress"
-            run_start "$max_tasks" > "$log_file" 2>&1
+            run_start "$max_tasks" 2>&1 | tee "$log_file"
             local run_exit=$?
             echo ""
             echo "=== Final output (last 50 lines) ==="
