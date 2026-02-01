@@ -614,27 +614,43 @@ run_start() {
         # Capture ralph_loop output to get actual error messages
         local ralph_output_file="${RALPH_DIR}/.last_ralph_output"
         local ralph_exit_code=0
-        "$ralph_loop" > "$ralph_output_file" 2>&1 || ralph_exit_code=$?
+
+        # Run ralph and capture exit code properly
+        set +e  # Disable exit on error temporarily
+        "$ralph_loop" > "$ralph_output_file" 2>&1
+        ralph_exit_code=$?
+        set -e  # Re-enable exit on error
+
+        # DEBUG: Always show exit code
+        echo "DEBUG: ralph_loop exit code = $ralph_exit_code"
 
         # Check result
         local task_status="unknown"
         local error_msg=""
         local why_failed=""
 
-        # If ralph_loop failed to run, mark as failed immediately
-        if [[ "$ralph_exit_code" -ne 0 ]]; then
+        # Check if process was killed by signal
+        if [[ "$ralph_exit_code" -gt 128 ]]; then
+            # Process was killed by signal (exit code = 128 + signal number)
+            local signal_num=$((ralph_exit_code - 128))
+            task_status="failed"
+            error_msg="Process killed by signal $signal_num"
+            why_failed="ralph_loop.sh was terminated by the system (signal $signal_num). This usually means it ran out of memory, exceeded CPU limits, or was manually killed. Try reducing task complexity or increasing system resources."
+        elif [[ "$ralph_exit_code" -ne 0 ]]; then
             task_status="failed"
 
             # Extract actual error from output
             if [[ -f "$ralph_output_file" ]]; then
-                error_msg=$(tail -20 "$ralph_output_file" | grep -i "error\|failed\|exception" | head -5 | sed 's/^/    /')
+                error_msg=$(tail -20 "$ralph_output_file" | grep -i "error\|failed\|exception\|killed" | head -5 | sed 's/^/    /')
                 if [[ -z "$error_msg" ]]; then
                     error_msg=$(tail -10 "$ralph_output_file" | sed 's/^/    /')
                 fi
             fi
 
             # Provide helpful "why" based on common patterns
-            if grep -q "Unknown option" "$ralph_output_file" 2>/dev/null; then
+            if grep -q "Killed\|killed" "$ralph_output_file" 2>/dev/null; then
+                why_failed="Process was killed (likely by system due to resource limits). Try reducing task complexity or increasing memory."
+            elif grep -q "Unknown option" "$ralph_output_file" 2>/dev/null; then
                 why_failed="ralph_loop.sh received an unsupported command-line option. Check ralph_loop.sh --help for valid options."
             elif grep -q "timeout\|timed out" "$ralph_output_file" 2>/dev/null; then
                 why_failed="Task exceeded timeout limit. Consider increasing timeout or breaking task into smaller pieces."
@@ -647,28 +663,36 @@ run_start() {
             fi
         else
             # Ralph ran successfully - check if task was completed
+            echo "DEBUG: ralph_loop exited cleanly, checking completion signals..."
             if [[ -f "${RALPH_DIR}/.response_analysis" ]]; then
                 local exit_signal
                 exit_signal=$(jq -r '.analysis.exit_signal // "false"' "${RALPH_DIR}/.response_analysis" 2>/dev/null || echo "false")
                 local status
                 status=$(jq -r '.analysis.status // "unknown"' "${RALPH_DIR}/.response_analysis" 2>/dev/null || echo "unknown")
+                echo "DEBUG: .response_analysis - exit_signal=$exit_signal, status=$status"
 
                 if [[ "$exit_signal" == "true" ]] || [[ "$status" == "COMPLETE" ]]; then
                     task_status="complete"
                 else
+                    task_status="failed"
                     error_msg="Task did not signal completion (status: ${status})"
                     why_failed="Task ran but didn't complete. Possible reasons: task is too complex, Claude got stuck, or missing dependencies."
                 fi
             else
+                echo "DEBUG: No .response_analysis file found"
+                task_status="failed"
                 error_msg="No response analysis found"
                 why_failed="ralph_loop.sh ran but didn't produce expected output files. May indicate a configuration issue."
             fi
 
             # Also check PROMPT.md output for TASK_COMPLETE signal
             if [[ -f "${RALPH_DIR}/PROMPT.md" ]] && grep -q "TASK_COMPLETE" "${RALPH_DIR}/logs/"*.log 2>/dev/null; then
+                echo "DEBUG: Found TASK_COMPLETE in logs, marking as complete"
                 task_status="complete"
             fi
         fi
+
+        echo "DEBUG: Final task_status = $task_status"
 
         echo ""
         echo "=========================================="
