@@ -1012,6 +1012,7 @@ main() {
 
         start|run)
             local max_tasks=0
+            local log_file="/tmp/ralph-tasks.log"
 
             while [[ $# -gt 0 ]]; do
                 case "$1" in
@@ -1025,7 +1026,9 @@ main() {
                 esac
             done
 
-            run_start "$max_tasks"
+            # Log to both screen and file
+            echo "Logging to: $log_file"
+            run_start "$max_tasks" 2>&1 | tee "$log_file"
             ;;
 
         failed|fail|f)
