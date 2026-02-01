@@ -492,7 +492,9 @@ get_task_attempts() {
     fi
 
     # Count attempts logged in the file
-    grep -c "^- \*\*Attempt [0-9]*\*\*:" "$task_file" 2>/dev/null || echo "0"
+    local count
+    count=$(grep -c "^- \*\*Attempt [0-9]*\*\*:" "$task_file" 2>/dev/null) || count=0
+    echo "$count"
 }
 
 log_task_attempt() {
