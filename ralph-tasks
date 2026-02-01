@@ -631,9 +631,6 @@ run_start() {
         ralph_exit_code=$?
         set -e  # Re-enable exit on error
 
-        # DEBUG: Always show exit code
-        echo "DEBUG: ralph_loop exit code = $ralph_exit_code"
-
         # Check result
         local task_status="unknown"
         local error_msg=""
@@ -673,13 +670,11 @@ run_start() {
             fi
         else
             # Ralph ran successfully - check if task was completed
-            echo "DEBUG: ralph_loop exited cleanly, checking completion signals..."
             if [[ -f "${RALPH_DIR}/.response_analysis" ]]; then
                 local exit_signal
                 exit_signal=$(jq -r '.analysis.exit_signal // "false"' "${RALPH_DIR}/.response_analysis" 2>/dev/null || echo "false")
                 local status
                 status=$(jq -r '.analysis.status // "unknown"' "${RALPH_DIR}/.response_analysis" 2>/dev/null || echo "unknown")
-                echo "DEBUG: .response_analysis - exit_signal=$exit_signal, status=$status"
 
                 if [[ "$exit_signal" == "true" ]] || [[ "$status" == "COMPLETE" ]]; then
                     task_status="complete"
@@ -697,12 +692,9 @@ run_start() {
 
             # Also check current run's output for TASK_COMPLETE signal
             if grep -q "TASK_COMPLETE" "$ralph_output_file" 2>/dev/null; then
-                echo "DEBUG: Found TASK_COMPLETE in current output, marking as complete"
                 task_status="complete"
             fi
         fi
-
-        echo "DEBUG: Final task_status = $task_status"
 
         echo ""
         echo "=========================================="
