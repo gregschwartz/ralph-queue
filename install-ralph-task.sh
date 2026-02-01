@@ -49,11 +49,16 @@ install_aliases() {
 # Ralph task management aliases
 alias rt="ralph-tasks"
 alias rta="ralph-tasks add"
-alias rtl="ralph-tasks list"
+alias rtli="ralph-tasks list"
 alias rtn="ralph-tasks next"
 alias rtd="ralph-tasks done"
 alias rtq="ralph-tasks queue"
-alias rts="ralph-tasks start"'
+alias rts="ralph-tasks start"
+
+# Quick add by priority
+alias rth="ralph-tasks add h"
+alias rtm="ralph-tasks add m"
+alias rtl="ralph-tasks add l"'
 
     if grep -q "Ralph task management aliases" "$SHELL_RC" 2>/dev/null; then
         echo "✓ Aliases already in ${SHELL_RC}"
@@ -63,13 +68,19 @@ alias rts="ralph-tasks start"'
     echo "$aliases" >> "$SHELL_RC"
     echo "✓ Added aliases to ${SHELL_RC}"
     echo ""
-    echo "  rt   = ralph-tasks"
-    echo "  rta  = ralph-tasks add"
-    echo "  rtl  = ralph-tasks list"
-    echo "  rtn  = ralph-tasks next"
-    echo "  rtd  = ralph-tasks done"
-    echo "  rtq  = ralph-tasks queue"
-    echo "  rts  = ralph-tasks start"
+    echo "  Basic:"
+    echo "    rt    = ralph-tasks"
+    echo "    rta   = ralph-tasks add"
+    echo "    rtli  = ralph-tasks list"
+    echo "    rtn   = ralph-tasks next"
+    echo "    rtd   = ralph-tasks done"
+    echo "    rtq   = ralph-tasks queue"
+    echo "    rts   = ralph-tasks start"
+    echo ""
+    echo "  Quick add by priority:"
+    echo "    rth   = ralph-tasks add h  (high)"
+    echo "    rtm   = ralph-tasks add m  (medium)"
+    echo "    rtl   = ralph-tasks add l  (low)"
 }
 
 # Main
