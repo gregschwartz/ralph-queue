@@ -631,6 +631,9 @@ run_start() {
         ralph_exit_code=$?
         set -e  # Re-enable exit on error
 
+        # DEBUG: Always show exit code
+        echo "DEBUG: ralph_loop exit code = $ralph_exit_code"
+
         # Check result
         local task_status="unknown"
         local error_msg=""
@@ -691,7 +694,9 @@ run_start() {
             fi
 
             # Also check current run's output for TASK_COMPLETE signal
-            if grep -q "TASK_COMPLETE" "$ralph_output_file" 2>/dev/null; then
+            # But ONLY if .response_analysis existed (meaning ralph ran properly)
+            if [[ -f "${RALPH_DIR}/.response_analysis" ]] && grep -q "TASK_COMPLETE" "$ralph_output_file" 2>/dev/null; then
+                echo "DEBUG: Found TASK_COMPLETE in current output, marking as complete"
                 task_status="complete"
             fi
         fi
@@ -732,6 +737,8 @@ run_start() {
                 fi
                 dir_failed "" "Failed after ${RALPH_TASK_MAX_ATTEMPTS} attempts. See task file for attempt history."
                 ((tasks_failed++))
+                # Rebuild queue to remove the moved task
+                queue_build > /dev/null
             fi
         fi
 
@@ -1014,7 +1021,7 @@ main() {
 
         start|run)
             local max_tasks=0
-            local log_file="/tmp/ralph-tasks.log"
+            local log_file="${RALPH_DIR}/ralph-tasks.log"
 
             while [[ $# -gt 0 ]]; do
                 case "$1" in
